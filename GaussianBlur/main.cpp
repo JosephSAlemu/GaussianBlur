@@ -1,0 +1,305 @@
+//----------------------------------------------------------------------------
+// Copyright 2026, Ed Keenan, all rights reserved.
+//----------------------------------------------------------------------------
+#include "lodepng.h"
+#include "kernel.cuh"
+struct img_data
+{
+	char* img_buffer;
+	unsigned w;
+	unsigned h;
+	lodepng::State state;
+};
+/*
+Display general info about the PNG.
+*/
+void displayPNGInfo(const LodePNGInfo &info)
+{
+	const LodePNGColorMode &color = info.color;
+
+	Trace::out("\n");
+	Trace::out("Compression method: %d \n", info.compression_method);
+	Trace::out("     Filter method: %d \n", info.filter_method);
+	Trace::out("  Interlace method: %d \n", info.interlace_method);
+	Trace::out("        Color type: %d (LCT_RGB = 2) \n", color.colortype);
+	Trace::out("         Bit depth: %d \n", color.bitdepth);
+	Trace::out("    Bits per pixel: %d \n", lodepng_get_bpp(&color));
+	Trace::out("Channels per pixel: %d \n", lodepng_get_channels(&color));
+	Trace::out(" Is greyscale type: %d \n", lodepng_is_greyscale_type(&color));
+	Trace::out("    Can have alpha: %d \n", lodepng_can_have_alpha(&color));
+	Trace::out("      Palette size: %d \n", color.palettesize);
+	Trace::out("     Has color key: %d \n", color.key_defined);
+
+	if(color.key_defined)
+	{
+		Trace::out("Color key r: %d \n", color.key_r);
+		Trace::out("Color key g: %d \n", color.key_g);
+		Trace::out("Color key b: %d \n", color.key_b);
+	}
+	Trace::out("Texts: %d \n", info.text_num);
+	for(size_t i = 0; i < info.text_num; i++)
+	{
+		Trace::out("Text: %d : %s \n", info.text_keys[i], info.text_strings[i]);
+	}
+	Trace::out("International texts: %d \n", info.itext_num);
+	for(size_t i = 0; i < info.itext_num; i++)
+	{
+		std::cout << "Text: "
+			<< info.itext_keys[i] << ", "
+			<< info.itext_langtags[i] << ", "
+			<< info.itext_transkeys[i] << ": "
+			<< info.itext_strings[i] << std::endl << std::endl;
+	}
+	Trace::out("Time defined: %d \n", info.time_defined);
+	if(info.time_defined)
+	{
+		const LodePNGTime &time = info.time;
+		Trace::out("  year: %d\n", time.year);
+		Trace::out(" month: %d\n", time.month);
+		Trace::out("   day: %d\n", time.day);
+		Trace::out("  hour: %d\n", time.hour);
+		Trace::out("minute: %d\n", time.minute);
+		Trace::out("second: %d\n", time.second);
+	}
+	Trace::out("Physical pixel dimensions and aspect ratio defined: %d\n", info.phys_defined);
+	if(info.phys_defined)
+	{
+		Trace::out("physics X: %d \n", info.phys_x);
+		Trace::out("physics Y: %d \n", info.phys_y);
+		Trace::out("physics unit: %d (1 = meter) \n", info.phys_unit);
+	}
+}
+
+/*
+Display the names and sizes of all chunks in the PNG file.
+*/
+void displayChunkNames(const std::vector<unsigned char> &buffer)
+{
+	// Listing chunks is based on the original file, not the decoded png info.
+	const unsigned char *chunk, *end;
+	end = &buffer.back() + 1;
+	chunk = &buffer.front() + 8;
+
+	std::cout << std::endl << "Chunks:" << std::endl;
+	std::cout << " type: length(s)";
+	std::string last_type;
+	while(chunk < end && end - chunk >= 8)
+	{
+		char type[5];
+		lodepng_chunk_type(type, chunk);
+		if(std::string(type).size() != 4)
+		{
+			std::cout << "this is probably not a PNG" << std::endl;
+			return;
+		}
+
+		if(last_type != type)
+		{
+			std::cout << std::endl;
+			std::cout << " " << type << ": ";
+		}
+		last_type = type;
+
+		std::cout << lodepng_chunk_length(chunk) << ", ";
+
+		chunk = lodepng_chunk_next_const(chunk, end);
+	}
+	std::cout << std::endl;
+}
+
+/*
+Show the filtertypes of each scanline in this PNG image.
+*/
+void displayFilterTypes(const std::vector<unsigned char> &buffer, bool ignore_checksums)
+{
+	//Get color type and interlace type
+	lodepng::State state;
+	if(ignore_checksums)
+	{
+		state.decoder.ignore_crc = 1;
+		state.decoder.zlibsettings.ignore_adler32 = 1;
+	}
+	unsigned w, h;
+	unsigned error;
+	error = lodepng_inspect(&w, &h, &state, &buffer[0], buffer.size());
+
+	if(error)
+	{
+		std::cout << "inspect error " << error << ": " << lodepng_error_text(error) << std::endl;
+		return;
+	}
+
+	if(state.info_png.interlace_method == 1)
+	{
+		std::cout << "showing filtertypes for interlaced PNG not supported by this example" << std::endl;
+		return;
+	}
+
+	//Read literal data from all IDAT chunks
+	const unsigned char *chunk, *begin, *end;
+	end = &buffer.back() + 1;
+	begin = chunk = &buffer.front() + 8;
+
+	std::vector<unsigned char> zdata;
+
+	while(chunk < end && end - chunk >= 8)
+	{
+		char type[5];
+		lodepng_chunk_type(type, chunk);
+		if(std::string(type).size() != 4)
+		{
+			std::cout << "this is probably not a PNG" << std::endl;
+			return;
+		}
+
+		if(std::string(type) == "IDAT")
+		{
+			const unsigned char *cdata = lodepng_chunk_data_const(chunk);
+			unsigned clength = lodepng_chunk_length(chunk);
+			if(chunk + clength + 12 > end || clength > buffer.size() || chunk + clength + 12 < begin)
+			{
+				std::cout << "invalid chunk length" << std::endl;
+				return;
+			}
+
+			for(unsigned i = 0; i < clength; i++)
+			{
+				zdata.push_back(cdata[i]);
+			}
+		}
+
+		chunk = lodepng_chunk_next_const(chunk, end);
+	}
+
+	//Decompress all IDAT data
+	std::vector<unsigned char> data;
+	error = lodepng::decompress(data, &zdata[0], zdata.size());
+
+	if(error)
+	{
+		std::cout << "decompress error " << error << ": " << lodepng_error_text(error) << std::endl;
+		return;
+	}
+
+	//A line is 1 filter byte + all pixels
+	size_t linebytes = 1 + lodepng_get_raw_size(w, 1, &state.info_png.color);
+
+	if(linebytes == 0)
+	{
+		std::cout << "error: linebytes is 0" << std::endl;
+		return;
+	}
+
+	std::cout << "Filter types: ";
+	for(size_t i = 0; i < data.size(); i += linebytes)
+	{
+		std::cout << (int)(data[i]) << " ";
+	}
+	std::cout << std::endl;
+
+}
+
+int decodeImage(const char* src_path, img_data* data)
+{
+	std::vector<unsigned char> image;
+	unsigned w, h;
+	std::vector<unsigned char> buffer;
+	lodepng::State state;
+	unsigned error;
+
+	state.decoder.color_convert = 0;
+	state.decoder.remember_unknown_chunks = 1; //make it reproduce even unknown chunks in the saved image
+
+	lodepng::load_file(buffer, src_path);
+	error = lodepng::decode(image, w, h, state, buffer);
+	if (error)
+	{
+		std::cout << "decoder error " << error << ": " << lodepng_error_text(error) << std::endl;
+		return 1;
+	}
+
+	data->img_buffer = new char[buffer.size()];
+	std::copy(image.begin(), image.end(), data->img_buffer);
+	data->w = w;
+	data->h = h;
+	data->state = state;
+	
+	bool ignore_checksums = false;
+
+	Trace::out("  Filesize: %d (%d K)\n", buffer.size(), buffer.size() / 1024);
+	Trace::out("     Width: %d \n", w);
+	Trace::out("    Height: %d \n", h);
+	Trace::out("Num pixels: %d \n", w * h);
+
+
+	displayPNGInfo(state.info_png);
+	std::cout << std::endl;
+	displayChunkNames(buffer);
+	std::cout << std::endl;
+	displayFilterTypes(buffer, ignore_checksums);
+	std::cout << std::endl;
+}
+
+int encodeImage(const char* dest_path, img_data* data)
+{
+	size_t len = strlen(data->img_buffer);
+
+	std::vector<unsigned char> buffer;
+	std::vector<unsigned char> image(data->img_buffer, data->img_buffer + len);
+
+
+	data->state.encoder.text_compression = 1;
+	
+	unsigned error = lodepng::encode(buffer, image, data->w, data->h, data->state);
+	if (error)
+	{
+		std::cout << "encoder error " << error << ": " << lodepng_error_text(error) << std::endl;
+		return error;
+	}
+
+	lodepng::save_file(buffer, dest_path);
+}
+
+void hostBlur(char* img_buffer)
+{
+	//unsafe but idc
+	size_t len = strlen(img_buffer);
+
+	// data stored R,G,B - one byte each pixel
+	for (size_t i = 0; i < len; i++)
+	{
+		{ // brighten.. by 30% ref demo
+			int tmp = (int)((float)img_buffer[i] * 1.3f);
+			if (tmp > 0xFF)
+			{
+				img_buffer[i] = 0xFF;
+			}
+			else
+			{
+				img_buffer[i] = (unsigned char)0;
+			}
+		}
+
+	}
+}
+
+int main()
+{
+	//START_BANNER_MAIN("--Main--");
+	const char* src_path = "scarecrow.png";
+	const char* dest_path = "test.png";
+	img_data* data = new img_data();
+	int error = decodeImage(src_path, data);
+	if (error)
+	{
+		return 0;
+	}
+
+	hostBlur(data->img_buffer);
+	deviceBlur(data->img_buffer,data->w, data->h);
+
+	encodeImage(dest_path, data);
+	
+}
+
+// ---  End of File ---

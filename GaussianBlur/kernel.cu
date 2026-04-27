@@ -1,26 +1,22 @@
-﻿#include "CudaFramework.h"
-#include "cuda_runtime.h"
-#include "device_launch_parameters.h"
-
-#include <stdio.h>
+﻿#include "kernel.cuh"
 
 //define method signature above main for NVCC to recognize it and allow you to move method below main method.
 cudaError_t guassianBlur();
 
-__global__ void ImageKernel()
+//Try to load 
+__global__ void imageKernel()
 {
     //Implement
 }
 
-int main()
+__global__ void tiledImageKernel()
 {
-    Cuda::Trace::out("Testing");
-    guassianBlur();
-    return 0;
+  //Implement
 }
 
+
 // Helper function for Gaussian Blur
-cudaError_t guassianBlur()
+cudaError_t deviceBlur(char* img_buffer, unsigned h, unsigned w)
 {
     // Implement
     cudaError_t cudaStatus;
@@ -34,13 +30,13 @@ cudaError_t guassianBlur()
 
     // Allocate GPU buffers for three vectors (two input, one output)    .
     
-    int threads = 256;
+    int threads = 32;
     int x = -1;
     int y = -1;
+    dim3 Block(threads, threads, 1);
     dim3 Grid(x, y ,1);
-    dim3 Block(threads, 1, 1);
     // Launch a kernel on the GPU with one thread for each element.
-    //ImageKernel<<<Grid, Block>>>();
+    //imageKernel<<<Grid, Block>>>();
 
     // Check for any errors launching the kernel
     cudaStatus = cudaGetLastError();
