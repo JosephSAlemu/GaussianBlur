@@ -5,7 +5,7 @@
 #include "kernel.cuh"
 struct img_data
 {
-	char* img_buffer;
+	unsigned char* img_buffer;
 	unsigned w;
 	unsigned h;
 	lodepng::State state;
@@ -218,7 +218,7 @@ int decodeImage(const char* src_path, img_data* data)
 		return 1;
 	}
 
-	data->img_buffer = new char[buffer.size()];
+	data->img_buffer = new unsigned char[buffer.size()];
 	std::copy(image.begin(), image.end(), data->img_buffer);
 	data->w = w;
 	data->h = h;
@@ -242,7 +242,7 @@ int decodeImage(const char* src_path, img_data* data)
 
 int encodeImage(const char* dest_path, img_data* data)
 {
-	size_t len = strlen(data->img_buffer);
+	size_t len = strlen((char*)data->img_buffer);
 
 	std::vector<unsigned char> buffer;
 	std::vector<unsigned char> image(data->img_buffer, data->img_buffer + len);
@@ -260,10 +260,10 @@ int encodeImage(const char* dest_path, img_data* data)
 	lodepng::save_file(buffer, dest_path);
 }
 
-void hostBlur(char* img_buffer)
+void hostBlur(unsigned char* img_buffer)
 {
 	//unsafe but idc
-	size_t len = strlen(img_buffer);
+	size_t len = strlen((char*) img_buffer);
 
 	// data stored R,G,B - one byte each pixel
 	for (size_t i = 0; i < len; i++)
@@ -296,10 +296,11 @@ int main()
 	}
 
 	hostBlur(data->img_buffer);
-	deviceBlur(data->img_buffer,data->w, data->h);
+	//deviceBlur(data->img_buffer,data->w, data->h);
 
 	encodeImage(dest_path, data);
-	
+
+	delete data;
 }
 
 // ---  End of File ---
