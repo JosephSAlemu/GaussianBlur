@@ -1,5 +1,5 @@
 ﻿#include "kernel.cuh"
-
+#include "RGBPixel.h"
 #include "CudaFramework.h"
 #include "device_launch_parameters.h"
 //Try to load 

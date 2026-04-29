@@ -3,11 +3,13 @@
 //----------------------------------------------------------------------------
 #include "lodepng.h"
 #include "kernel.cuh"
+#include "RGBPixel.h"
 struct img_data
 {
-	unsigned char* img_buffer;
+	RGBPixel* pixels;
 	unsigned w;
 	unsigned h;
+	size_t len;
 	lodepng::State state;
 };
 /*
@@ -204,26 +206,30 @@ int decodeImage(const char* src_path, img_data* data)
 	std::vector<unsigned char> image;
 	unsigned w, h;
 	std::vector<unsigned char> buffer;
-	lodepng::State state;
 	unsigned error;
 
-	state.decoder.color_convert = 0;
-	state.decoder.remember_unknown_chunks = 1; //make it reproduce even unknown chunks in the saved image
+	data->state.decoder.color_convert = 0;
+	data->state.decoder.remember_unknown_chunks = 1; //make it reproduce even unknown chunks in the saved image
 
 	lodepng::load_file(buffer, src_path);
-	error = lodepng::decode(image, w, h, state, buffer);
+	
+	// Reminder so I don't fucking forget but image buffer size is w*h*3 not w*h. Tripped me off until I realized it stores all 3 channels.
+	error = lodepng::decode(image, data->w, data->h, data->state, buffer);
 	if (error)
 	{
 		std::cout << "decoder error " << error << ": " << lodepng_error_text(error) << std::endl;
 		return 1;
 	}
 
-	data->img_buffer = new unsigned char[buffer.size()];
-	std::copy(image.begin(), image.end(), data->img_buffer);
-	data->w = w;
-	data->h = h;
-	data->state = state;
-	
+	// Convert from a single buffer to RGB. Remember image goes from RGB
+	data->len = image.size() / 3;
+	data->pixels = new RGBPixel[data->len];
+	for (size_t i = 0; i < image.size(); i+=3) {
+		data->pixels[i].r = image[i];
+		data->pixels[i].g = image[i+1];
+		data->pixels[i].b = image[i+2];
+	}
+
 	bool ignore_checksums = false;
 
 	Trace::out("  Filesize: %d (%d K)\n", buffer.size(), buffer.size() / 1024);
@@ -232,7 +238,7 @@ int decodeImage(const char* src_path, img_data* data)
 	Trace::out("Num pixels: %d \n", w * h);
 
 
-	displayPNGInfo(state.info_png);
+	displayPNGInfo(data->state.info_png);
 	std::cout << std::endl;
 	displayChunkNames(buffer);
 	std::cout << std::endl;
@@ -242,11 +248,18 @@ int decodeImage(const char* src_path, img_data* data)
 
 int encodeImage(const char* dest_path, img_data* data)
 {
-	size_t len = strlen((char*)data->img_buffer);
+	// Convert from RGB to a single buffer again
+	size_t len = data->len * 3;
 
 	std::vector<unsigned char> buffer;
-	std::vector<unsigned char> image(data->img_buffer, data->img_buffer + len);
+	std::vector<unsigned char> image(len);
 
+	for (size_t i = 0; i < len; i+=3)
+	{
+		image[i]	 = data->pixels[i].r;
+		image[i + 1] = data->pixels[i].g;
+		image[i + 2] = data->pixels[i].b;
+	}
 
 	data->state.encoder.text_compression = 1;
 	
@@ -260,27 +273,27 @@ int encodeImage(const char* dest_path, img_data* data)
 	lodepng::save_file(buffer, dest_path);
 }
 
-void hostBlur(unsigned char* img_buffer)
+void hostBlur(img_data* data)
 {
-	//unsafe but idc
-	size_t len = strlen((char*) img_buffer);
-
+	// Create an Apron (Check that you are start at pixel row > 2 and row < rowLength - 2
+	// Also check height > 2 and height < heightLength - 2
+	// 
 	// data stored R,G,B - one byte each pixel
-	for (size_t i = 0; i < len; i++)
-	{
-		{ // brighten.. by 30% ref demo
-			int tmp = (int)((float)img_buffer[i] * 1.3f);
-			if (tmp > 0xFF)
-			{
-				img_buffer[i] = 0xFF;
-			}
-			else
-			{
-				img_buffer[i] = (unsigned char)0;
-			}
-		}
-
-	}
+	//for (size_t i = 0; i < data->len; i++)
+	//{
+	//	int row = 
+	//	{ // brighten.. by 30% ref demo
+	//		int tmp = (int)((float)img_buffer[i] * 1.3f);
+	//		if (tmp > 0xFF)
+	//		{
+	//			img_buffer[i] = 0xFF;
+	//		}
+	//		else
+	//		{
+	//			img_buffer[i] = (unsigned char)0;
+	//		}
+	//	}
+	//}
 }
 
 int main()
@@ -288,19 +301,18 @@ int main()
 	//START_BANNER_MAIN("--Main--");
 	const char* src_path = "scarecrow.png";
 	const char* dest_path = "test.png";
-	img_data* data = new img_data();
-	int error = decodeImage(src_path, data);
+	img_data data;
+	int error = decodeImage(src_path, &data);
 	if (error)
 	{
 		return 0;
 	}
-
-	hostBlur(data->img_buffer);
+	
+	//hostBlur(data->pixels);
 	//deviceBlur(data->img_buffer,data->w, data->h);
-
-	encodeImage(dest_path, data);
-
-	delete data;
+	
+	encodeImage(dest_path, &data);
+	
 }
 
 // ---  End of File ---
