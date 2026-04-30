@@ -31,9 +31,9 @@ This sample shows how LodePNG can be used for a conforming PNG editor.
 
 //g++ lodepng.cpp example_reencode.cpp -ansi -pedantic -Wall -Wextra -lSDL -O3 -o reencode
 
-#include "lodepng.h"
+//#include "lodepng.h"
 
-#include <iostream>
+//#include <iostream>
 /*
 int main(int argc, char *argv[]) {
   std::vector<unsigned char> image;

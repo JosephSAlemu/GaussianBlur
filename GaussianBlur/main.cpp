@@ -1,17 +1,8 @@
 //----------------------------------------------------------------------------
 // Copyright 2026, Ed Keenan, all rights reserved.
 //----------------------------------------------------------------------------
-#include "lodepng.h"
 #include "kernel.cuh"
-#include "RGBPixel.h"
-struct img_data
-{
-	RGBPixel* pixels;
-	unsigned w;
-	unsigned h;
-	size_t len;
-	lodepng::State state;
-};
+#include "common.h"
 /*
 Display general info about the PNG.
 */
@@ -201,118 +192,167 @@ void displayFilterTypes(const std::vector<unsigned char> &buffer, bool ignore_ch
 
 }
 
-int decodeImage(const char* src_path, img_data* data)
+ImageError _NODISCARD decodeImage(const char* src_path, ImgData& data) noexcept
 {
 	std::vector<unsigned char> image;
-	unsigned w, h;
 	std::vector<unsigned char> buffer;
 	unsigned error;
 
-	data->state.decoder.color_convert = 0;
-	data->state.decoder.remember_unknown_chunks = 1; //make it reproduce even unknown chunks in the saved image
+	data.state.decoder.color_convert = 0;
+	data.state.decoder.remember_unknown_chunks = 1; //make it reproduce even unknown chunks in the saved image
 
 	lodepng::load_file(buffer, src_path);
 	
 	// Reminder so I don't fucking forget but image buffer size is w*h*3 not w*h. Tripped me off until I realized it stores all 3 channels.
-	error = lodepng::decode(image, data->w, data->h, data->state, buffer);
+	error = lodepng::decode(image, data.w, data.h, data.state, buffer);
 	if (error)
 	{
 		std::cout << "decoder error " << error << ": " << lodepng_error_text(error) << std::endl;
-		return 1;
+		return ImageError::FAILURE;
 	}
-
+	if (data.w * data.h * 3 != image.size())
+	{
+		Trace::out("Image has less or more than 3 channels. Please check the image");
+		return ImageError::FAILURE;
+	}
 	// Convert from a single buffer to RGB. Remember image goes from RGB
-	data->len = image.size() / 3;
-	data->pixels = new RGBPixel[data->len];
+	data.len = image.size() / 3;
+	data.pixels = new RGBPixel[data.len];
 	for (size_t i = 0; i < image.size(); i+=3) {
-		data->pixels[i].r = image[i];
-		data->pixels[i].g = image[i+1];
-		data->pixels[i].b = image[i+2];
+		size_t p = i / 3;
+		data.pixels[p].r = image[i];
+		data.pixels[p].g = image[i + 1];
+		data.pixels[p].b = image[i+2];
 	}
 
 	bool ignore_checksums = false;
 
 	Trace::out("  Filesize: %d (%d K)\n", buffer.size(), buffer.size() / 1024);
-	Trace::out("     Width: %d \n", w);
-	Trace::out("    Height: %d \n", h);
-	Trace::out("Num pixels: %d \n", w * h);
+	Trace::out("     Width: %d \n", data.w);
+	Trace::out("    Height: %d \n", data.h);
+	Trace::out("Num pixels: %d \n", data.w * data.h);
 
 
-	displayPNGInfo(data->state.info_png);
+	displayPNGInfo(data.state.info_png);
 	std::cout << std::endl;
 	displayChunkNames(buffer);
 	std::cout << std::endl;
 	displayFilterTypes(buffer, ignore_checksums);
 	std::cout << std::endl;
+	
+	return ImageError::SUCCESS;
 }
 
-int encodeImage(const char* dest_path, img_data* data)
+ImageError _NODISCARD encodeImage(const char* dest_path, ImgData& data)
 {
 	// Convert from RGB to a single buffer again
-	size_t len = data->len * 3;
+	size_t len = data.len * 3;
 
 	std::vector<unsigned char> buffer;
 	std::vector<unsigned char> image(len);
 
 	for (size_t i = 0; i < len; i+=3)
 	{
-		image[i]	 = data->pixels[i].r;
-		image[i + 1] = data->pixels[i].g;
-		image[i + 2] = data->pixels[i].b;
+		size_t p = i / 3;
+		image[i]		 = data.pixels[p].r;
+		image[i + 1] = data.pixels[p].g;
+		image[i + 2] = data.pixels[p].b;
 	}
 
-	data->state.encoder.text_compression = 1;
+	data.state.encoder.text_compression = 1;
 	
-	unsigned error = lodepng::encode(buffer, image, data->w, data->h, data->state);
+	unsigned error = lodepng::encode(buffer, image, data.w, data.h, data.state);
 	if (error)
 	{
 		std::cout << "encoder error " << error << ": " << lodepng_error_text(error) << std::endl;
-		return error;
+		return ImageError::FAILURE;
 	}
 
 	lodepng::save_file(buffer, dest_path);
 }
 
-void hostBlur(img_data* data)
+void blur(GaussianKernel& gaussian, ImgData& data, int rhalo, int chalo, int i)
+{
+	unsigned rRes = 0;
+	unsigned gRes = 0;
+	unsigned bRes = 0;
+
+	int width = data.w;
+	for (int c = -chalo; c <= chalo; c += data.w)
+	{
+		int kRow = c / width + rhalo;
+		for (int r = -rhalo; r <= rhalo; r++)
+		{
+			int kCol = rhalo + r;
+			int index = i + c + r;
+
+			rRes += data.pixels[index].r * gaussian.kernel[kRow][kCol];
+			gRes += data.pixels[index].g * gaussian.kernel[kRow][kCol];
+			bRes += data.pixels[index].b * gaussian.kernel[kRow][kCol];
+		}
+	}
+
+	data.pixels[i].r = rRes / gaussian.divisor;
+	data.pixels[i].g = gRes / gaussian.divisor;
+	data.pixels[i].b = bRes / gaussian.divisor;
+
+}
+
+void hostBlur(GaussianKernel& gaussian, ImgData& data, int passes = 1)
 {
 	// Create an Apron (Check that you are start at pixel row > 2 and row < rowLength - 2
 	// Also check height > 2 and height < heightLength - 2
-	// 
 	// data stored R,G,B - one byte each pixel
-	//for (size_t i = 0; i < data->len; i++)
-	//{
-	//	int row = 
-	//	{ // brighten.. by 30% ref demo
-	//		int tmp = (int)((float)img_buffer[i] * 1.3f);
-	//		if (tmp > 0xFF)
-	//		{
-	//			img_buffer[i] = 0xFF;
-	//		}
-	//		else
-	//		{
-	//			img_buffer[i] = (unsigned char)0;
-	//		}
-	//	}
-	//}
+
+	int rhalo = gaussian.halo;
+	int chalo = data.w * gaussian.halo;
+
+	int leftCols = rhalo;
+	int rightCols = data.w - leftCols;
+
+	int topRows = chalo;
+	int bottomRows = (data.w * data.h) - topRows;
+
+	for (int i = 0; i < data.len; i++)
+	{
+		int col = i % data.w;
+		int row = i;
+		if (row >= topRows && row < bottomRows &&
+			col >= leftCols && col < rightCols)
+		{
+			for (int j = 0; j < passes; j++)
+			{
+				blur(gaussian, data, rhalo, chalo, i);
+			}
+		}
+	}
 }
+
 
 int main()
 {
 	//START_BANNER_MAIN("--Main--");
 	const char* src_path = "scarecrow.png";
 	const char* dest_path = "test.png";
-	img_data data;
-	int error = decodeImage(src_path, &data);
-	if (error)
+	ImgData data;
+	GaussianKernel gaussian;
+	gaussian.set5x5ImageKernel();
+	ImageError error;
+	error = decodeImage(src_path, data);
+	if (error == ImageError::FAILURE)
 	{
-		return 0;
+		return 1;
+	}
+	hostBlur(gaussian, data, 5);
+	
+	error = encodeImage(dest_path, data);
+	if (error == ImageError::FAILURE)
+	{
+		return 1;
 	}
 	
-	//hostBlur(data->pixels);
 	//deviceBlur(data->img_buffer,data->w, data->h);
-	
-	encodeImage(dest_path, &data);
-	
+
 }
 
 // ---  End of File ---

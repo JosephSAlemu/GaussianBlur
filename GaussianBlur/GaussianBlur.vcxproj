@@ -103,7 +103,7 @@
     <ClInclude Include="..\Framework\Framework.h" />
     <ClInclude Include="kernel.cuh" />
     <ClInclude Include="lodepng.h" />
-    <ClInclude Include="RGBPixel.h" />
+    <ClInclude Include="common.h" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="duck.png" />
