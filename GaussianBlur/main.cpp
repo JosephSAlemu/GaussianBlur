@@ -2,7 +2,6 @@
 // Copyright 2026, Ed Keenan, all rights reserved.
 //----------------------------------------------------------------------------
 #include "kernel.cuh"
-#include "common.h"
 /*
 Display general info about the PNG.
 */
@@ -291,11 +290,9 @@ void blur(GaussianKernel& gaussian, ImgData& data, int rhalo, int chalo, int i)
 			bRes += data.pixels[index].b * gaussian.kernel[kRow][kCol];
 		}
 	}
-
 	data.pixels[i].r = rRes / gaussian.divisor;
 	data.pixels[i].g = gRes / gaussian.divisor;
 	data.pixels[i].b = bRes / gaussian.divisor;
-
 }
 
 void hostBlur(GaussianKernel& gaussian, ImgData& data, int passes = 1)
@@ -329,6 +326,8 @@ void hostBlur(GaussianKernel& gaussian, ImgData& data, int passes = 1)
 }
 
 
+
+
 int main()
 {
 	//START_BANNER_MAIN("--Main--");
@@ -336,22 +335,23 @@ int main()
 	const char* dest_path = "test.png";
 	ImgData data;
 	GaussianKernel gaussian;
-	gaussian.set5x5ImageKernel();
-	ImageError error;
-	error = decodeImage(src_path, data);
-	if (error == ImageError::FAILURE)
-	{
-		return 1;
-	}
-	hostBlur(gaussian, data, 5);
+	//gaussian.set5x5ImageKernel();
+	//ImageError error;
+	//error = decodeImage(src_path, data);
+	//if (error == ImageError::FAILURE)
+	//{
+	//	return 1;
+	//}
+	//hostBlur(gaussian, data, 10);
+	//
+	//
+	//error = encodeImage(dest_path, data);
+	//if (error == ImageError::FAILURE)
+	//{
+	//	return 1;
+	//}
 	
-	error = encodeImage(dest_path, data);
-	if (error == ImageError::FAILURE)
-	{
-		return 1;
-	}
-	
-	//deviceBlur(data->img_buffer,data->w, data->h);
+	deviceBlur(gaussian, data, 10);
 
 }
 
