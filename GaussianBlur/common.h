@@ -4,7 +4,6 @@
 #define KERNEL_DENOMINATOR_5X5 273
 #include "lodepng.h"
 #include "Framework.h"
-#include <functional>
 
 struct RGBPixel
 {
