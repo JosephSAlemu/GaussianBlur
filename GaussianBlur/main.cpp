@@ -191,19 +191,21 @@ void displayFilterTypes(const std::vector<unsigned char> &buffer, bool ignore_ch
 
 }
 
-ImageError _NODISCARD decodeImage(const char* src_path, ImgData& data) noexcept
+ImageError _NODISCARD decodeImage(const char* src_path, ImgData& data) noexcept(true)
 {
 	std::vector<unsigned char> image;
 	std::vector<unsigned char> buffer;
 	unsigned error;
 
-	data.state.decoder.color_convert = 0;
-	data.state.decoder.remember_unknown_chunks = 1; //make it reproduce even unknown chunks in the saved image
+	data.state = new lodepng::State();
+
+	data.state->decoder.color_convert = 0;
+	data.state->decoder.remember_unknown_chunks = 1; //make it reproduce even unknown chunks in the saved image
 
 	lodepng::load_file(buffer, src_path);
 	
 	// Reminder so I don't fucking forget but image buffer size is w*h*3 not w*h. Tripped me off until I realized it stores all 3 channels.
-	error = lodepng::decode(image, data.w, data.h, data.state, buffer);
+	error = lodepng::decode(image, data.w, data.h, *(data.state), buffer);
 	if (error)
 	{
 		std::cout << "decoder error " << error << ": " << lodepng_error_text(error) << std::endl;
@@ -232,7 +234,7 @@ ImageError _NODISCARD decodeImage(const char* src_path, ImgData& data) noexcept
 	Trace::out("Num pixels: %d \n", data.w * data.h);
 
 
-	displayPNGInfo(data.state.info_png);
+	displayPNGInfo(data.state->info_png);
 	std::cout << std::endl;
 	displayChunkNames(buffer);
 	std::cout << std::endl;
@@ -242,7 +244,7 @@ ImageError _NODISCARD decodeImage(const char* src_path, ImgData& data) noexcept
 	return ImageError::SUCCESS;
 }
 
-ImageError _NODISCARD encodeImage(const char* dest_path, ImgData& data)
+ImageError _NODISCARD encodeImage(const char* dest_path, ImgData& data) noexcept(true)
 {
 	// Convert from RGB to a single buffer again
 	size_t len = data.len * 3;
@@ -257,10 +259,9 @@ ImageError _NODISCARD encodeImage(const char* dest_path, ImgData& data)
 		image[i + 1] = data.pixels[p].g;
 		image[i + 2] = data.pixels[p].b;
 	}
-
-	data.state.encoder.text_compression = 1;
+	data.state->encoder.text_compression = 1;
 	
-	unsigned error = lodepng::encode(buffer, image, data.w, data.h, data.state);
+	unsigned error = lodepng::encode(buffer, image, data.w, data.h, *(data.state));
 	if (error)
 	{
 		std::cout << "encoder error " << error << ": " << lodepng_error_text(error) << std::endl;
@@ -270,89 +271,120 @@ ImageError _NODISCARD encodeImage(const char* dest_path, ImgData& data)
 	lodepng::save_file(buffer, dest_path);
 }
 
-void blur(GaussianKernel& gaussian, ImgData& data, int rhalo, int chalo, int i)
-{
-	unsigned rRes = 0;
-	unsigned gRes = 0;
-	unsigned bRes = 0;
 
-	int width = data.w;
-	for (int c = -chalo; c <= chalo; c += data.w)
-	{
-		int kRow = c / width + rhalo;
-		for (int r = -rhalo; r <= rhalo; r++)
-		{
-			int kCol = rhalo + r;
-			int index = i + c + r;
-
-			rRes += data.pixels[index].r * gaussian.kernel[kRow][kCol];
-			gRes += data.pixels[index].g * gaussian.kernel[kRow][kCol];
-			bRes += data.pixels[index].b * gaussian.kernel[kRow][kCol];
-		}
-	}
-	data.pixels[i].r = rRes / gaussian.divisor;
-	data.pixels[i].g = gRes / gaussian.divisor;
-	data.pixels[i].b = bRes / gaussian.divisor;
-}
-
-void hostBlur(GaussianKernel& gaussian, ImgData& data, int passes = 1)
+void hostBlur(GaussianKernel5x5& gaussian, ImgData& out, int passes = 1)
 {
 	// Create an Apron (Check that you are start at pixel row > 2 and row < rowLength - 2
 	// Also check height > 2 and height < heightLength - 2
 	// data stored R,G,B - one byte each pixel
-
-	int rhalo = gaussian.halo;
-	int chalo = data.w * gaussian.halo;
-
-	int leftCols = rhalo;
-	int rightCols = data.w - leftCols;
-
-	int topRows = chalo;
-	int bottomRows = (data.w * data.h) - topRows;
-
-	for (int i = 0; i < data.len; i++)
+	ImgData buffer(out);
+	size_t len = out.len * sizeof(RGBPixel);
+	for (int i = 0; i < passes; i++)
 	{
-		int col = i % data.w;
-		int row = i;
-		if (row >= topRows && row < bottomRows &&
-			col >= leftCols && col < rightCols)
+		memcpy_s(buffer.pixels, len, out.pixels, len);
+		int rhalo = gaussian.halo;
+		int chalo = out.w * gaussian.halo;
+
+		int leftCols = rhalo;
+		int rightCols = out.w - leftCols;
+
+		int topRows = chalo;
+		int bottomRows = (out.w * out.h) - topRows;
+
+		for (int i = 0; i < out.len; i++)
 		{
-			for (int j = 0; j < passes; j++)
+			int col = i % out.w;
+			int row = i;
+			if (row >= topRows && row < bottomRows &&
+				col >= leftCols && col < rightCols)
 			{
-				blur(gaussian, data, rhalo, chalo, i);
+				unsigned rRes = 0;
+				unsigned gRes = 0;
+				unsigned bRes = 0;
+
+				int width = out.w;
+				for (int c = -chalo; c <= chalo; c += out.w)
+				{
+					int kRow = c / width + rhalo;
+					for (int r = -rhalo; r <= rhalo; r++)
+					{
+						int kCol = rhalo + r;
+						int index = i + c + r;
+						unsigned val = gaussian.kernel[kRow][kCol];
+
+						rRes += buffer.pixels[index].r * val;
+						gRes += buffer.pixels[index].g * val;
+						bRes += buffer.pixels[index].b * val;
+					}
+				}
+				out.pixels[i].r = rRes / gaussian.divisor;
+				out.pixels[i].g = gRes / gaussian.divisor;
+				out.pixels[i].b = bRes / gaussian.divisor;
 			}
 		}
 	}
 }
 
+bool isSameImage(ImgData& rhs, ImgData& lhs)
+{
+	if (rhs.len != lhs.len) { return false; }
+	for (int i = 0; i < rhs.len; i++)
+	{
+		if ( !(rhs.pixels[i] == lhs.pixels[i]) )
+		{
+			return false;
+		}
+	}
+	return true;
+}
 
+void benchmark(GaussianKernel5x5& gaussian, ImgData& out_h, ImgData& out_d, int passes = 1)
+{
+	PerformanceTimer host;
+	PerformanceTimer device;
 
+	host.Tic();
+	hostBlur(gaussian, out_h, passes);
+	host.Toc();
+	Trace::out("hostTime: %f\n", host.TimeInSeconds());
+
+	device.Tic();
+	deviceBlur(out_d, passes);
+	device.Toc();
+	Trace::out("deviceTime: %f\n", device.TimeInSeconds());
+}
 
 int main()
 {
-	//START_BANNER_MAIN("--Main--");
 	const char* src_path = "scarecrow.png";
-	const char* dest_path = "test.png";
-	ImgData data;
-	GaussianKernel gaussian;
-	//gaussian.set5x5ImageKernel();
-	//ImageError error;
-	//error = decodeImage(src_path, data);
-	//if (error == ImageError::FAILURE)
-	//{
-	//	return 1;
-	//}
-	//hostBlur(gaussian, data, 10);
-	//
-	//
-	//error = encodeImage(dest_path, data);
-	//if (error == ImageError::FAILURE)
-	//{
-	//	return 1;
-	//}
-	
-	deviceBlur(gaussian, data, 10);
+	int passes = 2;
 
+	ImgData data;
+	GaussianKernel5x5 gaussian;
+
+	ImageError error;
+	error = decodeImage(src_path, data);
+	if (error == ImageError::FAILURE)
+	{
+		return 1;
+	}
+	ImgData out_h(data);
+	ImgData out_d(data);
+
+	//benchmark(gaussian, out_h, out_d, passes);
+
+	deviceBlur(out_d, passes);
+	hostBlur(gaussian, out_h, passes);
+	
+	if (!isSameImage(out_d, out_h))
+	{
+		Trace::out("NOT SAME IMAGE. ERROR IN CODE!");
+		return 1;
+	}
+	
+	Trace::out("Blur x%d", passes);
+	encodeImage("test_host.png", out_h);
+	encodeImage("test_device.png", out_d);
 }
 
 // ---  End of File ---
