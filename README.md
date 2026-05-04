@@ -2,7 +2,7 @@
 
 ## Gaussian Blur 5x5 Kernel on the Host and Device in Visual Studio 2022 (MSVC)
 ### Host
-- Single threaded C++17.
+- Single threaded C++14.
 
 ### Device
 - Cuda C++
