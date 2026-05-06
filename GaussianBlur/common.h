@@ -110,9 +110,16 @@ struct GaussianKernel5x5
 	int divisor;
 };
 
-
 enum class ImageError : uint8_t
 {
 	SUCCESS,
 	FAILURE
 };
+
+enum class CudaType : uint8_t
+{
+	TILED,
+	NOTTILED
+};
+
+#define BENCHMARK true

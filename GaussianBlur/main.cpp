@@ -272,7 +272,7 @@ ImageError _NODISCARD encodeImage(const char* dest_path, ImgData& data) noexcept
 }
 
 
-void hostBlur(GaussianKernel5x5& gaussian, ImgData& out, int passes = 1)
+void hostBlur(ImgData& out, GaussianKernel5x5& gaussian, int passes = 1)
 {
 	// Create an Apron (Check that you are start at pixel row > 2 and row < rowLength - 2
 	// Also check height > 2 and height < heightLength - 2
@@ -325,12 +325,12 @@ void hostBlur(GaussianKernel5x5& gaussian, ImgData& out, int passes = 1)
 	}
 }
 
-bool isSameImage(ImgData& rhs, ImgData& lhs)
+bool isSameImage(ImgData& lhs, ImgData& rhs)
 {
-	if (rhs.len != lhs.len) { return false; }
+	if (lhs.len != rhs.len) { return false; }
 	for (int i = 0; i < rhs.len; i++)
 	{
-		if ( !(rhs.pixels[i] == lhs.pixels[i]) )
+		if ( !(lhs.pixels[i] == rhs.pixels[i]) )
 		{
 			return false;
 		}
@@ -338,26 +338,33 @@ bool isSameImage(ImgData& rhs, ImgData& lhs)
 	return true;
 }
 
-void benchmark(GaussianKernel5x5& gaussian, ImgData& out_h, ImgData& out_d, int passes = 1)
+void benchmark(ImgData& out_h, ImgData& out_d, ImgData& out_dt, GaussianKernel5x5& gaussian, int passes = 1)
 {
 	PerformanceTimer host;
 	PerformanceTimer device;
+	PerformanceTimer devicet;
+
 
 	host.Tic();
-	hostBlur(gaussian, out_h, passes);
+	hostBlur(out_h, gaussian, passes);
 	host.Toc();
 	Trace::out("hostTime: %f\n", host.TimeInSeconds());
 
 	device.Tic();
-	deviceBlur(out_d, passes);
+	deviceBlur(out_d, CudaType::NOTTILED, passes);
 	device.Toc();
-	Trace::out("deviceTime: %f\n", device.TimeInSeconds());
+	Trace::out("No Tiles deviceTime: %f\n", device.TimeInSeconds());
+
+	devicet.Tic();
+	deviceBlur(out_dt, CudaType::TILED, passes);
+	devicet.Toc();
+	Trace::out("Tiled deviceTime: %f\n", devicet.TimeInSeconds());
 }
 
 int main()
 {
 	const char* src_path = "scarecrow.png";
-	int passes = 2;
+	int passes = 1;
 
 	ImgData data;
 	GaussianKernel5x5 gaussian;
@@ -370,21 +377,33 @@ int main()
 	}
 	ImgData out_h(data);
 	ImgData out_d(data);
+	ImgData out_dt(data);
 
-	//benchmark(gaussian, out_h, out_d, passes);
+#ifdef BENCHMARK
+	benchmark(out_h, out_d, out_dt, gaussian, passes);
 
-	deviceBlur(out_d, passes);
-	hostBlur(gaussian, out_h, passes);
-	
-	if (!isSameImage(out_d, out_h))
+#else
+
+	deviceBlur(out_dt, CudaType::TILED, passes);
+	deviceBlur(out_d, CudaType::NOTTILED, passes);
+	hostBlur(out_h, gaussian, passes);
+
+	if (!isSameImage(out_dt, out_d) || !isSameImage(out_h, out_d))
 	{
-		Trace::out("NOT SAME IMAGE. ERROR IN CODE!");
+		Trace::out("ERROR IN BLURRING CODE!");
 		return 1;
 	}
-	
-	Trace::out("Blur x%d", passes);
+
+	Trace::out("Blur x%d times", passes);
+
 	encodeImage("test_host.png", out_h);
 	encodeImage("test_device.png", out_d);
+	encodeImage("test_device_tiled.png", out_dt);
+
+
+#endif
+
+
 }
 
 // ---  End of File ---
